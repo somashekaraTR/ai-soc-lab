@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SENTRY // AI SOC Wallboard</title>
+<style>
+  :root{
+    --bg:#0A0E14;
+    --panel:#0F1620;
+    --panel-2:#121B28;
+    --line:#1C2A3A;
+    --text:#C7D2DD;
+    --dim:#5C6773;
+    --green:#39FF88;
+    --green-dim:#1F6B45;
+    --amber:#FFB627;
+    --red:#FF4757;
+    --red-dim:#5A1F27;
+    --blue:#4EA1FF;
+    --mono: 'IBM Plex Mono','Courier New',monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{background:var(--bg); color:var(--text); font-family:var(--mono); font-size:14px; -webkit-font-smoothing:antialiased;}
+
+  /* scanline / crt texture */
+  body::before{
+    content:"";
+    position:fixed; inset:0; pointer-events:none; z-index:9999;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.012) 0px,
+      rgba(255,255,255,0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    mix-blend-mode:overlay;
+  }
+  body::after{
+    content:"";
+    position:fixed; inset:0; pointer-events:none; z-index:9998;
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.45) 100%);
+  }
+
+  a{color:var(--green);}
+
+  /* ---------- Top bar ---------- */
+  header{
+    border-bottom:1px solid var(--line);
+    background:var(--panel);
+    padding:14px 24px;
+    display:flex; align-items:center; justify-content:space-between;
+    position:sticky; top:0; z-index:50;
+  }
+  .brand{display:flex; align-items:center; gap:12px;}
+  .brand .dot{
+    width:10px; height:10px; border-radius:50%; background:var(--green);
+    box-shadow:0 0 8px var(--green), 0 0 16px var(--green);
+    animation:pulse 2s infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:1;} 50%{opacity:.35;}}
+  .brand h1{font-size:16px; letter-spacing:3px; font-weight:600; color:#fff;}
+  .brand .sub{color:var(--dim); font-size:11px; letter-spacing:2px; margin-top:2px;}
+  .clock{color:var(--dim); font-size:12px; letter-spacing:1px; text-align:right;}
+  .clock span{display:block;}
+  .clock .time{color:var(--green); font-size:18px; font-weight:600; letter-spacing:2px;}
+
+  /* ---------- Layout ---------- */
+  .wrap{max-width:1400px; margin:0 auto; padding:24px;}
+
+  .kpi-row{
+    display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:24px;
+  }
+  .kpi{
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+    padding:16px 18px; position:relative; overflow:hidden;
+  }
+  .kpi .label{font-size:10px; letter-spacing:2px; color:var(--dim); text-transform:uppercase; margin-bottom:8px;}
+  .kpi .value{font-size:28px; font-weight:700; color:#fff; line-height:1;}
+  .kpi .value.green{color:var(--green);}
+  .kpi .value.amber{color:var(--amber);}
+  .kpi .value.red{color:var(--red);}
+  .kpi .foot{font-size:11px; color:var(--dim); margin-top:6px;}
+  .kpi::after{
+    content:""; position:absolute; left:0; bottom:0; height:2px; width:100%;
+    background:linear-gradient(90deg, transparent, var(--green), transparent);
+    opacity:.5;
+  }
+
+  .grid2{display:grid; grid-template-columns: 1.6fr 1fr; gap:14px; margin-bottom:24px;}
+  @media (max-width:1000px){ .grid2{grid-template-columns:1fr;} .kpi-row{grid-template-columns:repeat(2,1fr);} }
+
+  .panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+    display:flex; flex-direction:column; min-height:0;
+  }
+  .panel-head{
+    padding:12px 16px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .panel-head h2{font-size:11px; letter-spacing:3px; color:var(--dim); text-transform:uppercase; font-weight:600;}
+  .panel-head .meta{font-size:11px; color:var(--dim);}
+
+  /* ---------- Threat feed (signature element) ---------- */
+  .feed{
+    height:340px; overflow-y:auto; font-size:12px;
+    scrollbar-width:thin; scrollbar-color:var(--line) transparent;
+  }
+  .feed-row{
+    display:grid; grid-template-columns: 56px 78px 1fr 90px; gap:10px;
+    padding:9px 16px; border-bottom:1px solid var(--line);
+    align-items:center; cursor:pointer; transition:background .15s;
+  }
+  .feed-row:hover{background:var(--panel-2);}
+  .feed-row .score{
+    font-weight:700; font-size:13px; text-align:right; font-variant-numeric:tabular-nums;
+  }
+  .feed-row .sev{
+    font-size:10px; font-weight:700; letter-spacing:1px; padding:2px 6px; border-radius:3px;
+    text-align:center; text-transform:uppercase; width:fit-content;
+  }
+  .feed-row .desc{color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .feed-row .ip{color:var(--dim); text-align:right; font-size:11px;}
+
+  .sev-Critical{ background:rgba(255,71,87,.12); color:var(--red); border:1px solid rgba(255,71,87,.35);}
+  .sev-High{ background:rgba(255,182,39,.12); color:var(--amber); border:1px solid rgba(255,182,39,.35);}
+  .sev-Medium{ background:rgba(78,161,255,.12); color:var(--blue); border:1px solid rgba(78,161,255,.35);}
+  .sev-Low{ background:rgba(92,103,115,.15); color:var(--dim); border:1px solid var(--line);}
+
+  .score-Critical{color:var(--red);}
+  .score-High{color:var(--amber);}
+  .score-Medium{color:var(--blue);}
+  .score-Low{color:var(--dim);}
+
+  /* ---------- Charts ---------- */
+  .chart-area{padding:16px;}
+  .bar-row{display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:12px;}
+  .bar-label{width:90px; color:var(--dim); text-align:right; flex-shrink:0;}
+  .bar-track{flex:1; height:14px; background:var(--panel-2); border-radius:2px; overflow:hidden; position:relative;}
+  .bar-fill{height:100%; border-radius:2px; transition:width 1s ease;}
+  .bar-val{width:48px; text-align:left; color:var(--text); font-weight:600;}
+
+  /* donut */
+  .donut-wrap{display:flex; align-items:center; gap:24px; padding:20px;}
+  .donut{position:relative; width:140px; height:140px; flex-shrink:0;}
+  .donut svg{transform:rotate(-90deg);}
+  .donut-center{
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  }
+  .donut-center .num{font-size:26px; font-weight:700; color:#fff;}
+  .donut-center .lbl{font-size:9px; color:var(--dim); letter-spacing:2px; margin-top:2px;}
+  .legend{display:flex; flex-direction:column; gap:10px; font-size:12px;}
+  .legend-item{display:flex; align-items:center; gap:8px;}
+  .legend-swatch{width:10px; height:10px; border-radius:2px; flex-shrink:0;}
+  .legend-name{color:var(--text); flex:1;}
+  .legend-val{color:var(--dim); font-weight:600;}
+
+  /* ---------- Alert table ---------- */
+  .table-wrap{overflow-x:auto;}
+  table{width:100%; border-collapse:collapse; font-size:12px;}
+  thead th{
+    text-align:left; padding:10px 14px; color:var(--dim); font-size:10px; letter-spacing:2px;
+    text-transform:uppercase; border-bottom:1px solid var(--line); white-space:nowrap;
+    cursor:pointer; user-select:none;
+  }
+  thead th:hover{color:var(--green);}
+  tbody td{padding:10px 14px; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top;}
+  tbody tr{transition:background .15s; cursor:pointer;}
+  tbody tr:hover{background:var(--panel-2);}
+  .reason-cell{
+    max-width:420px; white-space:normal; color:var(--dim); font-size:11px; line-height:1.5;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .mono{font-variant-numeric:tabular-nums;}
+  .pill{
+    font-size:10px; font-weight:700; letter-spacing:1px; padding:3px 8px; border-radius:3px;
+    text-transform:uppercase; display:inline-block;
+  }
+  .risk-bar{display:flex; align-items:center; gap:8px;}
+  .risk-track{width:60px; height:6px; background:var(--panel-2); border-radius:3px; overflow:hidden;}
+  .risk-fill{height:100%; border-radius:3px;}
+
+  /* filters */
+  .filters{display:flex; gap:8px; padding:14px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; align-items:center;}
+  .filter-btn{
+    background:var(--panel-2); border:1px solid var(--line); color:var(--dim);
+    font-family:var(--mono); font-size:11px; letter-spacing:1px; padding:6px 12px;
+    border-radius:4px; cursor:pointer; text-transform:uppercase; transition:all .15s;
+  }
+  .filter-btn:hover{border-color:var(--green); color:var(--green);}
+  .filter-btn.active{background:var(--green-dim); color:var(--green); border-color:var(--green);}
+  .search-box{
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    font-family:var(--mono); font-size:11px; padding:6px 12px; border-radius:4px;
+    flex:1; min-width:160px; outline:none;
+  }
+  .search-box:focus{border-color:var(--green);}
+  .search-box::placeholder{color:var(--dim);}
+
+  footer{
+    text-align:center; color:var(--dim); font-size:11px; padding:30px 0; letter-spacing:1px;
+  }
+  footer .green{color:var(--green);}
+
+  ::-webkit-scrollbar{width:6px; height:6px;}
+  ::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
+
+  /* modal */
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1000;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  .modal-overlay.show{display:flex;}
+  .modal{
+    background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    max-width:560px; width:100%; padding:24px; position:relative;
+  }
+  .modal h3{font-size:13px; letter-spacing:2px; text-transform:uppercase; color:var(--dim); margin-bottom:16px;}
+  .modal-close{
+    position:absolute; top:16px; right:18px; color:var(--dim); cursor:pointer; font-size:18px;
+    background:none; border:none; font-family:var(--mono);
+  }
+  .modal-close:hover{color:var(--text);}
+  .modal-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; font-size:12px; margin-bottom:16px;}
+  .modal-grid .k{color:var(--dim);}
+  .modal-grid .v{color:var(--text); font-weight:600;}
+  .modal-reason{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:4px;
+    padding:12px; font-size:12px; line-height:1.6; color:var(--text);
+  }
+  .modal-reason .tag{color:var(--green); font-size:10px; letter-spacing:2px; display:block; margin-bottom:6px;}
+
+  .blink{animation:blink 1.4s infinite;}
+  @keyframes blink{0%,49%{opacity:1;} 50%,100%{opacity:0;}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="dot"></div>
+    <div>
+      <h1>SENTRY</h1>
+      <div class="sub">AI THREAT TRIAGE // SOC WALLBOARD</div>
+    </div>
+  </div>
+  <div class="clock">
+    <span class="time" id="clock">--:--:--</span>
+    <span id="date">-- --- ----</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- KPI ROW -->
+  <div class="kpi-row" id="kpiRow"></div>
+
+  <!-- THREAT FEED + DETECTION BREAKDOWN -->
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Live Threat Feed <span class="blink" style="color:var(--green)">●</span></h2>
+        <div class="meta" id="feedMeta">sorted by risk score</div>
+      </div>
+      <div class="feed" id="feed"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Detection Breakdown</h2>
+        <div class="meta">by attack class</div>
+      </div>
+      <div class="donut-wrap" id="donutWrap"></div>
+      <div class="panel-head" style="border-top:1px solid var(--line);">
+        <h2>Severity Distribution</h2>
+        <div class="meta" id="sevMeta"></div>
+      </div>
+      <div class="chart-area" id="sevBars"></div>
+    </div>
+  </div>
+
+  <!-- ALERT TABLE -->
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Alert Queue</h2>
+      <div class="meta" id="tableMeta"></div>
+    </div>
+    <div class="filters">
+      <button class="filter-btn active" data-sev="All">All</button>
+      <button class="filter-btn" data-sev="Critical">Critical</button>
+      <button class="filter-btn" data-sev="High">High</button>
+      <button class="filter-btn" data-sev="Medium">Medium</button>
+      <button class="filter-btn" data-sev="Low">Low</button>
+      <input class="search-box" id="searchBox" placeholder="filter by ip, process, port, label...">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th data-key="risk_score">Risk</th>
+            <th data-key="severity">Severity</th>
+            <th data-key="src_ip">Source</th>
+            <th data-key="dst_ip">Destination</th>
+            <th data-key="dst_port">Port</th>
+            <th data-key="process_name">Process</th>
+            <th data-key="label">Ground Truth</th>
+            <th>Triage Summary</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    Model: <span class="green">Isolation Forest</span> · contamination=0.04 · n_estimators=200 &nbsp;|&nbsp;
+    Detection rate: <span class="green">98.8%</span> on labeled malicious events &nbsp;|&nbsp;
+    Synthetic data — for lab/training use only
+  </footer>
+</div>
+
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <button class="modal-close" id="modalClose">✕</button>
+    <h3>Alert Detail</h3>
+    <div class="modal-grid" id="modalGrid"></div>
+    <div class="modal-reason">
+      <span class="tag">AI TRIAGE SUMMARY</span>
+      <span id="modalReason"></span>
+    </div>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script>
+/* ===================== Clock ===================== */
+function tick(){
+  const now = new Date();
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-GB');
+  document.getElementById('date').textContent = now.toLocaleDateString('en-GB', {weekday:'short', day:'2-digit', month:'short', year:'numeric'});
+}
+tick(); setInterval(tick, 1000);
+
+/* ===================== KPIs ===================== */
+const total = SUMMARY.total;
+const flagged = SUMMARY.flagged;
+const avgRisk = SUMMARY.avg_risk.toFixed(1);
+const sev = SUMMARY.by_severity;
+const crit = sev.Critical || 0;
+
+const kpis = [
+  {label:'Events Analyzed', value: total.toLocaleString(), cls:'', foot:'logs processed by model'},
+  {label:'Flagged Anomalies', value: flagged, cls:'amber', foot:(flagged/total*100).toFixed(1)+'% of total volume'},
+  {label:'Critical Alerts', value: crit, cls:'red', foot:'require immediate response'},
+  {label:'Avg Risk Score', value: avgRisk, cls:'green', foot:'0–100 scale, IsolationForest'},
+  {label:'Detection Rate', value:'98.8%', cls:'green', foot:'1 false negative / 85 malicious'}
+];
+document.getElementById('kpiRow').innerHTML = kpis.map(k => `
+  <div class="kpi">
+    <div class="label">${k.label}</div>
+    <div class="value ${k.cls}">${k.value}</div>
+    <div class="foot">${k.foot}</div>
+  </div>
+`).join('');
+
+/* ===================== Threat Feed ===================== */
+const feedEl = document.getElementById('feed');
+const sorted = [...ALERTS].sort((a,b)=> b.risk_score - a.risk_score);
+feedEl.innerHTML = sorted.map((a,i) => `
+  <div class="feed-row" data-idx="${ALERTS.indexOf(a)}">
+    <div class="score score-${a.severity}">${a.risk_score.toFixed(1)}</div>
+    <div class="sev sev-${a.severity}">${a.severity}</div>
+    <div class="desc">${labelText(a)} · ${a.process_name}</div>
+    <div class="ip">${a.src_ip} → ${a.dst_ip}</div>
+  </div>
+`).join('');
+document.getElementById('feedMeta').textContent = `${ALERTS.length} alerts · sorted by risk`;
+
+function labelText(a){
+  const map = {
+    data_exfil:'Data Exfiltration',
+    port_scan:'Port Scan',
+    brute_force:'Brute Force',
+    normal:'Baseline'
+  };
+  return map[a.label] || a.label;
+}
+
+/* ===================== Donut: detection breakdown ===================== */
+const labelColors = {
+  data_exfil: '#FF4757',
+  port_scan: '#FFB627',
+  brute_force: '#4EA1FF',
+  normal: '#1C2A3A'
+};
+const labelNames = {
+  data_exfil:'Data Exfil',
+  port_scan:'Port Scan',
+  brute_force:'Brute Force',
+  normal:'Normal (unflagged)'
+};
+
+// counts among flagged alerts
+const counts = {};
+ALERTS.forEach(a => counts[a.label] = (counts[a.label]||0)+1);
+const flaggedTotal = ALERTS.length;
+
+const order = ['data_exfil','port_scan','brute_force'];
+let cumulative = 0;
+const radius = 60, circumference = 2*Math.PI*radius;
+let segments = '';
+order.forEach(key => {
+  const val = counts[key] || 0;
+  if(val === 0) return;
+  const frac = val/flaggedTotal;
+  const dash = frac*circumference;
+  segments += `<circle cx="70" cy="70" r="${radius}" fill="none" stroke="${labelColors[key]}" stroke-width="16"
+    stroke-dasharray="${dash} ${circumference-dash}" stroke-dashoffset="${-cumulative}" />`;
+  cumulative += dash;
+});
+
+const legendHTML = order.filter(k=>counts[k]).map(k => `
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:${labelColors[k]}"></div>
+    <div class="legend-name">${labelNames[k]}</div>
+    <div class="legend-val">${counts[k]}</div>
+  </div>
+`).join('');
+
+document.getElementById('donutWrap').innerHTML = `
+  <div class="donut">
+    <svg width="140" height="140" viewBox="0 0 140 140">
+      <circle cx="70" cy="70" r="${radius}" fill="none" stroke="#1C2A3A" stroke-width="16"/>
+      ${segments}
+    </svg>
+    <div class="donut-center">
+      <div class="num">${flaggedTotal}</div>
+      <div class="lbl">ALERTS</div>
+    </div>
+  </div>
+  <div class="legend">${legendHTML}</div>
+`;
+
+/* ===================== Severity bars ===================== */
+const sevColors = {Critical:'#FF4757', High:'#FFB627', Medium:'#4EA1FF', Low:'#5C6773'};
+const sevOrder = ['Critical','High','Medium','Low'];
+const maxSev = Math.max(...sevOrder.map(s=>sev[s]||0));
+document.getElementById('sevBars').innerHTML = sevOrder.map(s => {
+  const val = sev[s]||0;
+  const pct = maxSev ? (val/maxSev*100) : 0;
+  return `
+    <div class="bar-row">
+      <div class="bar-label">${s}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${sevColors[s]}"></div></div>
+      <div class="bar-val">${val}</div>
+    </div>
+  `;
+}).join('');
+document.getElementById('sevMeta').textContent = `${flaggedTotal} flagged total`;
+
+/* ===================== Table ===================== */
+let currentSort = {key:'risk_score', dir:-1};
+let currentSevFilter = 'All';
+let currentSearch = '';
+
+function renderTable(){
+  let rows = [...ALERTS];
+
+  if(currentSevFilter !== 'All'){
+    rows = rows.filter(r => r.severity === currentSevFilter);
+  }
+  if(currentSearch){
+    const q = currentSearch.toLowerCase();
+    rows = rows.filter(r =>
+      r.src_ip.toLowerCase().includes(q) ||
+      r.dst_ip.toLowerCase().includes(q) ||
+      r.process_name.toLowerCase().includes(q) ||
+      r.label.toLowerCase().includes(q) ||
+      String(r.dst_port).includes(q)
+    );
+  }
+
+  rows.sort((a,b) => {
+    const ka = a[currentSort.key], kb = b[currentSort.key];
+    if(typeof ka === 'string') return ka.localeCompare(kb) * currentSort.dir;
+    return (ka - kb) * currentSort.dir;
+  });
+
+  document.getElementById('tableMeta').textContent = `showing ${rows.length} of ${ALERTS.length}`;
+
+  document.getElementById('tbody').innerHTML = rows.map(r => {
+    const idx = ALERTS.indexOf(r);
+    return `
+    <tr data-idx="${idx}">
+      <td class="mono">
+        <div class="risk-bar">
+          <div class="risk-track"><div class="risk-fill" style="width:${r.risk_score}%; background:${sevColors[r.severity]}"></div></div>
+          <span style="color:${sevColors[r.severity]}; font-weight:700;">${r.risk_score.toFixed(1)}</span>
+        </div>
+      </td>
+      <td><span class="pill sev-${r.severity}">${r.severity}</span></td>
+      <td class="mono">${r.src_ip}</td>
+      <td class="mono">${r.dst_ip}</td>
+      <td class="mono">${r.dst_port}</td>
+      <td>${r.process_name}</td>
+      <td>${labelText(r)}</td>
+      <td class="reason-cell">${r.triage_reason}</td>
+    </tr>
+  `}).join('');
+
+  // re-bind row clicks
+  document.querySelectorAll('#tbody tr').forEach(tr => {
+    tr.addEventListener('click', () => openModal(ALERTS[parseInt(tr.dataset.idx)]));
+  });
+}
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentSevFilter = btn.dataset.sev;
+    renderTable();
+  });
+});
+
+document.getElementById('searchBox').addEventListener('input', e => {
+  currentSearch = e.target.value;
+  renderTable();
+});
+
+document.querySelectorAll('thead th[data-key]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    if(currentSort.key === key) currentSort.dir *= -1;
+    else { currentSort.key = key; currentSort.dir = -1; }
+    renderTable();
+  });
+});
+
+/* ===================== Feed row click -> modal ===================== */
+document.querySelectorAll('.feed-row').forEach(row => {
+  row.addEventListener('click', () => openModal(ALERTS[parseInt(row.dataset.idx)]));
+});
+
+/* ===================== Modal ===================== */
+function openModal(a){
+  document.getElementById('modalGrid').innerHTML = `
+    <div class="k">Source IP</div><div class="v mono">${a.src_ip}</div>
+    <div class="k">Destination IP</div><div class="v mono">${a.dst_ip}</div>
+    <div class="k">Destination Port</div><div class="v mono">${a.dst_port}</div>
+    <div class="k">Process</div><div class="v">${a.process_name}</div>
+    <div class="k">Risk Score</div><div class="v" style="color:${sevColors[a.severity]}">${a.risk_score.toFixed(1)} / 100</div>
+    <div class="k">Severity</div><div class="v"><span class="pill sev-${a.severity}">${a.severity}</span></div>
+    <div class="k">Bytes Sent</div><div class="v mono">${Math.round(a.bytes_sent).toLocaleString()}</div>
+    <div class="k">Bytes Received</div><div class="v mono">${Math.round(a.bytes_received).toLocaleString()}</div>
+    <div class="k">Login Attempts</div><div class="v mono">${a.login_attempts}</div>
+    <div class="k">Duration (s)</div><div class="v mono">${a.duration_sec.toFixed(2)}</div>
+    <div class="k">Ground Truth</div><div class="v">${labelText(a)}</div>
+  `;
+  document.getElementById('modalReason').textContent = a.triage_reason;
+  document.getElementById('modalOverlay').classList.add('show');
+}
+document.getElementById('modalClose').addEventListener('click', () => {
+  document.getElementById('modalOverlay').classList.remove('show');
+});
+document.getElementById('modalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'modalOverlay') document.getElementById('modalOverlay').classList.remove('show');
+});
+
+/* ===================== Init ===================== */
+renderTable();
+</script>
+</body>
+</html>

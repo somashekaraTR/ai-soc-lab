@@ -1,0 +1,577 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SENTRY // AI SOC Wallboard</title>
+<style>
+  :root{
+    --bg:#0A0E14;
+    --panel:#0F1620;
+    --panel-2:#121B28;
+    --line:#1C2A3A;
+    --text:#C7D2DD;
+    --dim:#5C6773;
+    --green:#39FF88;
+    --green-dim:#1F6B45;
+    --amber:#FFB627;
+    --red:#FF4757;
+    --red-dim:#5A1F27;
+    --blue:#4EA1FF;
+    --mono: 'IBM Plex Mono','Courier New',monospace;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  html,body{background:var(--bg); color:var(--text); font-family:var(--mono); font-size:14px; -webkit-font-smoothing:antialiased;}
+
+  /* scanline / crt texture */
+  body::before{
+    content:"";
+    position:fixed; inset:0; pointer-events:none; z-index:9999;
+    background: repeating-linear-gradient(
+      to bottom,
+      rgba(255,255,255,0.012) 0px,
+      rgba(255,255,255,0.012) 1px,
+      transparent 1px,
+      transparent 3px
+    );
+    mix-blend-mode:overlay;
+  }
+  body::after{
+    content:"";
+    position:fixed; inset:0; pointer-events:none; z-index:9998;
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.45) 100%);
+  }
+
+  a{color:var(--green);}
+
+  /* ---------- Top bar ---------- */
+  header{
+    border-bottom:1px solid var(--line);
+    background:var(--panel);
+    padding:14px 24px;
+    display:flex; align-items:center; justify-content:space-between;
+    position:sticky; top:0; z-index:50;
+  }
+  .brand{display:flex; align-items:center; gap:12px;}
+  .brand .dot{
+    width:10px; height:10px; border-radius:50%; background:var(--green);
+    box-shadow:0 0 8px var(--green), 0 0 16px var(--green);
+    animation:pulse 2s infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:1;} 50%{opacity:.35;}}
+  .brand h1{font-size:16px; letter-spacing:3px; font-weight:600; color:#fff;}
+  .brand .sub{color:var(--dim); font-size:11px; letter-spacing:2px; margin-top:2px;}
+  .clock{color:var(--dim); font-size:12px; letter-spacing:1px; text-align:right;}
+  .clock span{display:block;}
+  .clock .time{color:var(--green); font-size:18px; font-weight:600; letter-spacing:2px;}
+
+  /* ---------- Layout ---------- */
+  .wrap{max-width:1400px; margin:0 auto; padding:24px;}
+
+  .kpi-row{
+    display:grid; grid-template-columns:repeat(5,1fr); gap:14px; margin-bottom:24px;
+  }
+  .kpi{
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+    padding:16px 18px; position:relative; overflow:hidden;
+  }
+  .kpi .label{font-size:10px; letter-spacing:2px; color:var(--dim); text-transform:uppercase; margin-bottom:8px;}
+  .kpi .value{font-size:28px; font-weight:700; color:#fff; line-height:1;}
+  .kpi .value.green{color:var(--green);}
+  .kpi .value.amber{color:var(--amber);}
+  .kpi .value.red{color:var(--red);}
+  .kpi .foot{font-size:11px; color:var(--dim); margin-top:6px;}
+  .kpi::after{
+    content:""; position:absolute; left:0; bottom:0; height:2px; width:100%;
+    background:linear-gradient(90deg, transparent, var(--green), transparent);
+    opacity:.5;
+  }
+
+  .grid2{display:grid; grid-template-columns: 1.6fr 1fr; gap:14px; margin-bottom:24px;}
+  @media (max-width:1000px){ .grid2{grid-template-columns:1fr;} .kpi-row{grid-template-columns:repeat(2,1fr);} }
+
+  .panel{
+    background:var(--panel); border:1px solid var(--line); border-radius:6px;
+    display:flex; flex-direction:column; min-height:0;
+  }
+  .panel-head{
+    padding:12px 16px; border-bottom:1px solid var(--line);
+    display:flex; align-items:center; justify-content:space-between;
+  }
+  .panel-head h2{font-size:11px; letter-spacing:3px; color:var(--dim); text-transform:uppercase; font-weight:600;}
+  .panel-head .meta{font-size:11px; color:var(--dim);}
+
+  /* ---------- Threat feed (signature element) ---------- */
+  .feed{
+    height:340px; overflow-y:auto; font-size:12px;
+    scrollbar-width:thin; scrollbar-color:var(--line) transparent;
+  }
+  .feed-row{
+    display:grid; grid-template-columns: 56px 78px 1fr 90px; gap:10px;
+    padding:9px 16px; border-bottom:1px solid var(--line);
+    align-items:center; cursor:pointer; transition:background .15s;
+  }
+  .feed-row:hover{background:var(--panel-2);}
+  .feed-row .score{
+    font-weight:700; font-size:13px; text-align:right; font-variant-numeric:tabular-nums;
+  }
+  .feed-row .sev{
+    font-size:10px; font-weight:700; letter-spacing:1px; padding:2px 6px; border-radius:3px;
+    text-align:center; text-transform:uppercase; width:fit-content;
+  }
+  .feed-row .desc{color:var(--text); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .feed-row .ip{color:var(--dim); text-align:right; font-size:11px;}
+
+  .sev-Critical{ background:rgba(255,71,87,.12); color:var(--red); border:1px solid rgba(255,71,87,.35);}
+  .sev-High{ background:rgba(255,182,39,.12); color:var(--amber); border:1px solid rgba(255,182,39,.35);}
+  .sev-Medium{ background:rgba(78,161,255,.12); color:var(--blue); border:1px solid rgba(78,161,255,.35);}
+  .sev-Low{ background:rgba(92,103,115,.15); color:var(--dim); border:1px solid var(--line);}
+
+  .score-Critical{color:var(--red);}
+  .score-High{color:var(--amber);}
+  .score-Medium{color:var(--blue);}
+  .score-Low{color:var(--dim);}
+
+  /* ---------- Charts ---------- */
+  .chart-area{padding:16px;}
+  .bar-row{display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:12px;}
+  .bar-label{width:90px; color:var(--dim); text-align:right; flex-shrink:0;}
+  .bar-track{flex:1; height:14px; background:var(--panel-2); border-radius:2px; overflow:hidden; position:relative;}
+  .bar-fill{height:100%; border-radius:2px; transition:width 1s ease;}
+  .bar-val{width:48px; text-align:left; color:var(--text); font-weight:600;}
+
+  /* donut */
+  .donut-wrap{display:flex; align-items:center; gap:24px; padding:20px;}
+  .donut{position:relative; width:140px; height:140px; flex-shrink:0;}
+  .donut svg{transform:rotate(-90deg);}
+  .donut-center{
+    position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+  }
+  .donut-center .num{font-size:26px; font-weight:700; color:#fff;}
+  .donut-center .lbl{font-size:9px; color:var(--dim); letter-spacing:2px; margin-top:2px;}
+  .legend{display:flex; flex-direction:column; gap:10px; font-size:12px;}
+  .legend-item{display:flex; align-items:center; gap:8px;}
+  .legend-swatch{width:10px; height:10px; border-radius:2px; flex-shrink:0;}
+  .legend-name{color:var(--text); flex:1;}
+  .legend-val{color:var(--dim); font-weight:600;}
+
+  /* ---------- Alert table ---------- */
+  .table-wrap{overflow-x:auto;}
+  table{width:100%; border-collapse:collapse; font-size:12px;}
+  thead th{
+    text-align:left; padding:10px 14px; color:var(--dim); font-size:10px; letter-spacing:2px;
+    text-transform:uppercase; border-bottom:1px solid var(--line); white-space:nowrap;
+    cursor:pointer; user-select:none;
+  }
+  thead th:hover{color:var(--green);}
+  tbody td{padding:10px 14px; border-bottom:1px solid var(--line); white-space:nowrap; vertical-align:top;}
+  tbody tr{transition:background .15s; cursor:pointer;}
+  tbody tr:hover{background:var(--panel-2);}
+  .reason-cell{
+    max-width:420px; white-space:normal; color:var(--dim); font-size:11px; line-height:1.5;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
+  }
+  .mono{font-variant-numeric:tabular-nums;}
+  .pill{
+    font-size:10px; font-weight:700; letter-spacing:1px; padding:3px 8px; border-radius:3px;
+    text-transform:uppercase; display:inline-block;
+  }
+  .risk-bar{display:flex; align-items:center; gap:8px;}
+  .risk-track{width:60px; height:6px; background:var(--panel-2); border-radius:3px; overflow:hidden;}
+  .risk-fill{height:100%; border-radius:3px;}
+
+  /* filters */
+  .filters{display:flex; gap:8px; padding:14px 16px; border-bottom:1px solid var(--line); flex-wrap:wrap; align-items:center;}
+  .filter-btn{
+    background:var(--panel-2); border:1px solid var(--line); color:var(--dim);
+    font-family:var(--mono); font-size:11px; letter-spacing:1px; padding:6px 12px;
+    border-radius:4px; cursor:pointer; text-transform:uppercase; transition:all .15s;
+  }
+  .filter-btn:hover{border-color:var(--green); color:var(--green);}
+  .filter-btn.active{background:var(--green-dim); color:var(--green); border-color:var(--green);}
+  .search-box{
+    background:var(--panel-2); border:1px solid var(--line); color:var(--text);
+    font-family:var(--mono); font-size:11px; padding:6px 12px; border-radius:4px;
+    flex:1; min-width:160px; outline:none;
+  }
+  .search-box:focus{border-color:var(--green);}
+  .search-box::placeholder{color:var(--dim);}
+
+  footer{
+    text-align:center; color:var(--dim); font-size:11px; padding:30px 0; letter-spacing:1px;
+  }
+  footer .green{color:var(--green);}
+
+  ::-webkit-scrollbar{width:6px; height:6px;}
+  ::-webkit-scrollbar-thumb{background:var(--line); border-radius:3px;}
+
+  /* modal */
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,.6); z-index:1000;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  .modal-overlay.show{display:flex;}
+  .modal{
+    background:var(--panel); border:1px solid var(--line); border-radius:8px;
+    max-width:560px; width:100%; padding:24px; position:relative;
+  }
+  .modal h3{font-size:13px; letter-spacing:2px; text-transform:uppercase; color:var(--dim); margin-bottom:16px;}
+  .modal-close{
+    position:absolute; top:16px; right:18px; color:var(--dim); cursor:pointer; font-size:18px;
+    background:none; border:none; font-family:var(--mono);
+  }
+  .modal-close:hover{color:var(--text);}
+  .modal-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; font-size:12px; margin-bottom:16px;}
+  .modal-grid .k{color:var(--dim);}
+  .modal-grid .v{color:var(--text); font-weight:600;}
+  .modal-reason{
+    background:var(--panel-2); border:1px solid var(--line); border-radius:4px;
+    padding:12px; font-size:12px; line-height:1.6; color:var(--text);
+  }
+  .modal-reason .tag{color:var(--green); font-size:10px; letter-spacing:2px; display:block; margin-bottom:6px;}
+
+  .blink{animation:blink 1.4s infinite;}
+  @keyframes blink{0%,49%{opacity:1;} 50%,100%{opacity:0;}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="dot"></div>
+    <div>
+      <h1>SENTRY</h1>
+      <div class="sub">AI THREAT TRIAGE // SOC WALLBOARD</div>
+    </div>
+  </div>
+  <div class="clock">
+    <span class="time" id="clock">--:--:--</span>
+    <span id="date">-- --- ----</span>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- KPI ROW -->
+  <div class="kpi-row" id="kpiRow"></div>
+
+  <!-- THREAT FEED + DETECTION BREAKDOWN -->
+  <div class="grid2">
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Live Threat Feed <span class="blink" style="color:var(--green)">●</span></h2>
+        <div class="meta" id="feedMeta">sorted by risk score</div>
+      </div>
+      <div class="feed" id="feed"></div>
+    </div>
+
+    <div class="panel">
+      <div class="panel-head">
+        <h2>Detection Breakdown</h2>
+        <div class="meta">by attack class</div>
+      </div>
+      <div class="donut-wrap" id="donutWrap"></div>
+      <div class="panel-head" style="border-top:1px solid var(--line);">
+        <h2>Severity Distribution</h2>
+        <div class="meta" id="sevMeta"></div>
+      </div>
+      <div class="chart-area" id="sevBars"></div>
+    </div>
+  </div>
+
+  <!-- ALERT TABLE -->
+  <div class="panel">
+    <div class="panel-head">
+      <h2>Alert Queue</h2>
+      <div class="meta" id="tableMeta"></div>
+    </div>
+    <div class="filters">
+      <button class="filter-btn active" data-sev="All">All</button>
+      <button class="filter-btn" data-sev="Critical">Critical</button>
+      <button class="filter-btn" data-sev="High">High</button>
+      <button class="filter-btn" data-sev="Medium">Medium</button>
+      <button class="filter-btn" data-sev="Low">Low</button>
+      <input class="search-box" id="searchBox" placeholder="filter by ip, process, port, label...">
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th data-key="risk_score">Risk</th>
+            <th data-key="severity">Severity</th>
+            <th data-key="src_ip">Source</th>
+            <th data-key="dst_ip">Destination</th>
+            <th data-key="dst_port">Port</th>
+            <th data-key="process_name">Process</th>
+            <th data-key="label">Ground Truth</th>
+            <th>Triage Summary</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>
+    Model: <span class="green">Isolation Forest</span> · contamination=0.04 · n_estimators=200 &nbsp;|&nbsp;
+    Detection rate: <span class="green">98.8%</span> on labeled malicious events &nbsp;|&nbsp;
+    Synthetic data — for lab/training use only
+  </footer>
+</div>
+
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <button class="modal-close" id="modalClose">✕</button>
+    <h3>Alert Detail</h3>
+    <div class="modal-grid" id="modalGrid"></div>
+    <div class="modal-reason">
+      <span class="tag">AI TRIAGE SUMMARY</span>
+      <span id="modalReason"></span>
+    </div>
+  </div>
+</div>
+
+<script>
+const ALERTS = [{"src_ip": "10.0.0.42", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 709466.5924634249, "bytes_received": 1557.9152991530157, "login_attempts": 1, "process_name": "rundll32.exe", "duration_sec": 169.92943864272934, "label": "data_exfil", "risk_score": 100.0, "severity": "Critical", "triage_reason": "unusually large outbound transfer (709,466 bytes) to 185.220.101.7 \u2014 possible data exfiltration; rundll32.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.16", "dst_port": 63337, "bytes_sent": 48.86743305979007, "bytes_received": 5.663510866080557, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1280962824254896, "label": "port_scan", "risk_score": 98.8, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.10", "dst_port": 58612, "bytes_sent": 48.946178186349385, "bytes_received": 0.0199428025556131, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1698385664184812, "label": "port_scan", "risk_score": 98.8, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 58612 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.12", "dst_port": 60315, "bytes_sent": 64.53989064379545, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2991342460804585, "label": "port_scan", "risk_score": 98.0, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 60315 with minimal response \u2014 possible scan probe"}, {"src_ip": "10.0.0.13", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 570215.6036542613, "bytes_received": 2507.0997076148565, "login_attempts": 1, "process_name": "cmd.exe", "duration_sec": 124.58105098256144, "label": "data_exfil", "risk_score": 97.6, "severity": "Critical", "triage_reason": "unusually large outbound transfer (570,215 bytes) to 185.220.101.7 \u2014 possible data exfiltration; cmd.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.18", "dst_port": 63363, "bytes_sent": 66.81783181834629, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2632899542183172, "label": "port_scan", "risk_score": 97.4, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 63363 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.13", "dst_port": 62910, "bytes_sent": 55.69040093299847, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2114659458394011, "label": "port_scan", "risk_score": 97.3, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 62910 with minimal response \u2014 possible scan probe"}, {"src_ip": "10.0.0.48", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 581547.5954696785, "bytes_received": 2337.52045451636, "login_attempts": 1, "process_name": "cmd.exe", "duration_sec": 119.9804237370894, "label": "data_exfil", "risk_score": 97.3, "severity": "Critical", "triage_reason": "unusually large outbound transfer (581,547 bytes) to 185.220.101.7 \u2014 possible data exfiltration; cmd.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "10.0.0.11", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 452635.45171261294, "bytes_received": 1725.4149436135135, "login_attempts": 1, "process_name": "cmd.exe", "duration_sec": 118.74802634103462, "label": "data_exfil", "risk_score": 96.8, "severity": "Critical", "triage_reason": "unusually large outbound transfer (452,635 bytes) to 185.220.101.7 \u2014 possible data exfiltration; cmd.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "10.0.0.10", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 662635.0269848127, "bytes_received": 2516.5530028049207, "login_attempts": 1, "process_name": "rundll32.exe", "duration_sec": 113.7342285134212, "label": "data_exfil", "risk_score": 96.2, "severity": "Critical", "triage_reason": "unusually large outbound transfer (662,635 bytes) to 185.220.101.7 \u2014 possible data exfiltration; rundll32.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "10.0.0.44", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 580032.309657553, "bytes_received": 2766.9825895190984, "login_attempts": 1, "process_name": "powershell.exe", "duration_sec": 130.39653081276944, "label": "data_exfil", "risk_score": 95.9, "severity": "Critical", "triage_reason": "unusually large outbound transfer (580,032 bytes) to 185.220.101.7 \u2014 possible data exfiltration; powershell.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "10.0.0.39", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 430760.52624378336, "bytes_received": 1669.7305275938756, "login_attempts": 1, "process_name": "rundll32.exe", "duration_sec": 148.17261766547986, "label": "data_exfil", "risk_score": 95.3, "severity": "Critical", "triage_reason": "unusually large outbound transfer (430,760 bytes) to 185.220.101.7 \u2014 possible data exfiltration; rundll32.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "10.0.0.10", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 434403.311174361, "bytes_received": 1922.620494850436, "login_attempts": 1, "process_name": "cmd.exe", "duration_sec": 111.64520795222818, "label": "data_exfil", "risk_score": 93.5, "severity": "Critical", "triage_reason": "unusually large outbound transfer (434,403 bytes) to 185.220.101.7 \u2014 possible data exfiltration; cmd.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "10.0.0.29", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 357576.9329113695, "bytes_received": 1743.3147273726647, "login_attempts": 1, "process_name": "cmd.exe", "duration_sec": 129.3253491531457, "label": "data_exfil", "risk_score": 93.3, "severity": "Critical", "triage_reason": "unusually large outbound transfer (357,576 bytes) to 185.220.101.7 \u2014 possible data exfiltration; cmd.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.6", "dst_port": 63272, "bytes_sent": 51.65419422522841, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2481627188294519, "label": "port_scan", "risk_score": 93.1, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 63272 with minimal response \u2014 possible scan probe"}, {"src_ip": "10.0.0.9", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 478894.296479894, "bytes_received": 2693.023178643772, "login_attempts": 1, "process_name": "powershell.exe", "duration_sec": 123.24005814687928, "label": "data_exfil", "risk_score": 93.1, "severity": "Critical", "triage_reason": "unusually large outbound transfer (478,894 bytes) to 185.220.101.7 \u2014 possible data exfiltration; powershell.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.9", "dst_port": 58543, "bytes_sent": 71.01739649544594, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.188817196469354, "label": "port_scan", "risk_score": 93.0, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 58543 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.4", "dst_port": 55453, "bytes_sent": 48.44910224831981, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1357388606572895, "label": "port_scan", "risk_score": 91.6, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 55453 with minimal response \u2014 possible scan probe"}, {"src_ip": "10.0.0.37", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 509058.2426214458, "bytes_received": 1917.2121892562056, "login_attempts": 1, "process_name": "rundll32.exe", "duration_sec": 100.60415340542428, "label": "data_exfil", "risk_score": 91.3, "severity": "Critical", "triage_reason": "unusually large outbound transfer (509,058 bytes) to 185.220.101.7 \u2014 possible data exfiltration; rundll32.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.21", "dst_port": 48311, "bytes_sent": 80.08669008239167, "bytes_received": 6.834047333601411, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2089724195868287, "label": "port_scan", "risk_score": 90.5, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.5", "dst_port": 53813, "bytes_sent": 70.88884620965061, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2480880090767675, "label": "port_scan", "risk_score": 90.2, "severity": "Critical", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 53813 with minimal response \u2014 possible scan probe"}, {"src_ip": "10.0.0.26", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 460304.41958066187, "bytes_received": 1944.1023272508385, "login_attempts": 1, "process_name": "cmd.exe", "duration_sec": 91.74526368889796, "label": "data_exfil", "risk_score": 89.8, "severity": "High", "triage_reason": "unusually large outbound transfer (460,304 bytes) to 185.220.101.7 \u2014 possible data exfiltration; cmd.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "10.0.0.9", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 486019.5882403403, "bytes_received": 1707.2466942401345, "login_attempts": 1, "process_name": "cmd.exe", "duration_sec": 82.14147923317418, "label": "data_exfil", "risk_score": 89.8, "severity": "High", "triage_reason": "unusually large outbound transfer (486,019 bytes) to 185.220.101.7 \u2014 possible data exfiltration; cmd.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.23", "dst_port": 47393, "bytes_sent": 68.01819290201053, "bytes_received": 2.734978624388178, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2228019794191847, "label": "port_scan", "risk_score": 89.7, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 47393 with minimal response \u2014 possible scan probe"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 141.28166133092944, "bytes_received": 94.56416059906267, "login_attempts": 49, "process_name": "svchost.exe", "duration_sec": 0.9899717927383872, "label": "brute_force", "risk_score": 89.7, "severity": "High", "triage_reason": "49 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 150.83638695790677, "bytes_received": 83.90096798656313, "login_attempts": 47, "process_name": "svchost.exe", "duration_sec": 2.330868306048474, "label": "brute_force", "risk_score": 88.4, "severity": "High", "triage_reason": "47 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 192.6437133361276, "bytes_received": 104.97730109558992, "login_attempts": 48, "process_name": "svchost.exe", "duration_sec": 1.59639216125778, "label": "brute_force", "risk_score": 88.1, "severity": "High", "triage_reason": "48 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.24", "dst_port": 41218, "bytes_sent": 45.04733939998575, "bytes_received": 6.639797393354815, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2295332648352189, "label": "port_scan", "risk_score": 87.8, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.15", "dst_port": 24672, "bytes_sent": 46.27740547590206, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.114582051688043, "label": "port_scan", "risk_score": 87.4, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 24672 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.26", "dst_port": 39086, "bytes_sent": 62.986966623212666, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.0832792205392429, "label": "port_scan", "risk_score": 86.9, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 39086 with minimal response \u2014 possible scan probe"}, {"src_ip": "10.0.0.12", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 351326.59655348724, "bytes_received": 2409.845055845721, "login_attempts": 1, "process_name": "powershell.exe", "duration_sec": 115.99006633080369, "label": "data_exfil", "risk_score": 86.5, "severity": "High", "triage_reason": "unusually large outbound transfer (351,326 bytes) to 185.220.101.7 \u2014 possible data exfiltration; powershell.exe initiating large data transfer \u2014 suspicious script-based exfil"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 135.11920317936296, "bytes_received": 108.6950848200012, "login_attempts": 48, "process_name": "svchost.exe", "duration_sec": 1.8363372124638024, "label": "brute_force", "risk_score": 86.4, "severity": "High", "triage_reason": "48 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 118.67938767966774, "bytes_received": 102.0934633589543, "login_attempts": 47, "process_name": "svchost.exe", "duration_sec": 1.7719158262599706, "label": "brute_force", "risk_score": 86.2, "severity": "High", "triage_reason": "47 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 122.20096505232353, "bytes_received": 112.10777746823494, "login_attempts": 47, "process_name": "svchost.exe", "duration_sec": 2.26025624831414, "label": "brute_force", "risk_score": 86.1, "severity": "High", "triage_reason": "47 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 170.58795236270643, "bytes_received": 116.79024798503828, "login_attempts": 45, "process_name": "svchost.exe", "duration_sec": 1.925060983238916, "label": "brute_force", "risk_score": 86.1, "severity": "High", "triage_reason": "45 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 145.49113745166, "bytes_received": 74.42961701679552, "login_attempts": 39, "process_name": "svchost.exe", "duration_sec": 2.3545571948166417, "label": "brute_force", "risk_score": 85.4, "severity": "High", "triage_reason": "39 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.11", "dst_port": 15629, "bytes_sent": 53.74484343317991, "bytes_received": 5.546900835082206, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1992510397285311, "label": "port_scan", "risk_score": 85.0, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 172.515136980642, "bytes_received": 93.27818363826512, "login_attempts": 38, "process_name": "svchost.exe", "duration_sec": 2.672558586805894, "label": "brute_force", "risk_score": 85.0, "severity": "High", "triage_reason": "38 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.22", "dst_port": 23875, "bytes_sent": 71.75224455567833, "bytes_received": 3.6859065334928753, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2241721834139159, "label": "port_scan", "risk_score": 84.3, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 23875 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.7", "dst_port": 32970, "bytes_sent": 70.00603408516268, "bytes_received": 4.586553992354, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2173977066303395, "label": "port_scan", "risk_score": 84.2, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 32970 with minimal response \u2014 possible scan probe"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 118.44387189480706, "bytes_received": 89.0753295952366, "login_attempts": 39, "process_name": "svchost.exe", "duration_sec": 2.2458698203781102, "label": "brute_force", "risk_score": 84.2, "severity": "High", "triage_reason": "39 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 140.56850593286927, "bytes_received": 76.55921102650623, "login_attempts": 33, "process_name": "svchost.exe", "duration_sec": 2.556146224945864, "label": "brute_force", "risk_score": 83.5, "severity": "High", "triage_reason": "33 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 143.0098624608246, "bytes_received": 96.1481237229617, "login_attempts": 42, "process_name": "svchost.exe", "duration_sec": 2.081111608449416, "label": "brute_force", "risk_score": 83.5, "severity": "High", "triage_reason": "42 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 130.98490022832087, "bytes_received": 103.25684525210826, "login_attempts": 42, "process_name": "svchost.exe", "duration_sec": 1.92984188597642, "label": "brute_force", "risk_score": 83.3, "severity": "High", "triage_reason": "42 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.17", "dst_port": 12461, "bytes_sent": 49.60853869639581, "bytes_received": 4.273940007065234, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1811201709865769, "label": "port_scan", "risk_score": 83.2, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 12461 with minimal response \u2014 possible scan probe"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 148.93680388554836, "bytes_received": 102.6901752777154, "login_attempts": 43, "process_name": "svchost.exe", "duration_sec": 2.3951955382677346, "label": "brute_force", "risk_score": 83.1, "severity": "High", "triage_reason": "43 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 175.56821790523776, "bytes_received": 92.83316092063924, "login_attempts": 38, "process_name": "svchost.exe", "duration_sec": 1.960301809307253, "label": "brute_force", "risk_score": 83.0, "severity": "High", "triage_reason": "38 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 201.71581254435955, "bytes_received": 101.493338397698, "login_attempts": 37, "process_name": "svchost.exe", "duration_sec": 2.251287387185718, "label": "brute_force", "risk_score": 82.4, "severity": "High", "triage_reason": "37 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.2", "dst_port": 13777, "bytes_sent": 51.00632720162744, "bytes_received": 11.411711691132826, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1397942633552243, "label": "port_scan", "risk_score": 82.4, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 164.00145392652482, "bytes_received": 101.75154440666472, "login_attempts": 39, "process_name": "svchost.exe", "duration_sec": 2.472748652329697, "label": "brute_force", "risk_score": 82.3, "severity": "High", "triage_reason": "39 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 176.08510399651925, "bytes_received": 121.84810310984808, "login_attempts": 30, "process_name": "svchost.exe", "duration_sec": 2.617971601114052, "label": "brute_force", "risk_score": 81.6, "severity": "High", "triage_reason": "30 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.14", "dst_port": 8266, "bytes_sent": 40.0, "bytes_received": 0.9128149534767138, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1327125447975215, "label": "port_scan", "risk_score": 81.5, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 8266 with minimal response \u2014 possible scan probe"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 170.53651191174112, "bytes_received": 87.06989584243746, "login_attempts": 21, "process_name": "svchost.exe", "duration_sec": 1.1823548649642237, "label": "brute_force", "risk_score": 81.4, "severity": "High", "triage_reason": "21 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 167.66518032455133, "bytes_received": 111.6297582623604, "login_attempts": 30, "process_name": "svchost.exe", "duration_sec": 2.779147478386224, "label": "brute_force", "risk_score": 80.7, "severity": "High", "triage_reason": "30 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 152.26830396396315, "bytes_received": 105.91214784616692, "login_attempts": 39, "process_name": "svchost.exe", "duration_sec": 1.8441462037663927, "label": "brute_force", "risk_score": 80.7, "severity": "High", "triage_reason": "39 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.27", "dst_port": 20810, "bytes_sent": 55.84772770739179, "bytes_received": 1.004198693470525, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.170582148876718, "label": "port_scan", "risk_score": 80.7, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 20810 with minimal response \u2014 possible scan probe"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 151.58140536417656, "bytes_received": 88.14617371299514, "login_attempts": 30, "process_name": "svchost.exe", "duration_sec": 1.5893568079635705, "label": "brute_force", "risk_score": 80.7, "severity": "High", "triage_reason": "30 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 189.95000186359349, "bytes_received": 112.00494344440015, "login_attempts": 31, "process_name": "svchost.exe", "duration_sec": 2.381696539790985, "label": "brute_force", "risk_score": 80.5, "severity": "High", "triage_reason": "31 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.1", "dst_port": 2081, "bytes_sent": 68.43306674432955, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2201468436210265, "label": "port_scan", "risk_score": 79.5, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 2081 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.25", "dst_port": 11851, "bytes_sent": 60.59539936230994, "bytes_received": 0.0770234077880043, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1794317255988922, "label": "port_scan", "risk_score": 79.5, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 11851 with minimal response \u2014 possible scan probe"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 172.8566067911247, "bytes_received": 86.50349970034156, "login_attempts": 18, "process_name": "svchost.exe", "duration_sec": 1.9963721507671692, "label": "brute_force", "risk_score": 79.2, "severity": "High", "triage_reason": "18 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 139.58135279436434, "bytes_received": 91.00322317716996, "login_attempts": 31, "process_name": "svchost.exe", "duration_sec": 2.2940689756713297, "label": "brute_force", "risk_score": 79.2, "severity": "High", "triage_reason": "31 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 139.62265664093957, "bytes_received": 87.29231211170459, "login_attempts": 20, "process_name": "svchost.exe", "duration_sec": 2.3596638009147197, "label": "brute_force", "risk_score": 79.1, "severity": "High", "triage_reason": "20 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 163.37880637591536, "bytes_received": 94.7065447633067, "login_attempts": 32, "process_name": "svchost.exe", "duration_sec": 1.9710669203928293, "label": "brute_force", "risk_score": 78.9, "severity": "High", "triage_reason": "32 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 106.18794167197726, "bytes_received": 105.16055014775564, "login_attempts": 26, "process_name": "svchost.exe", "duration_sec": 2.055611667420429, "label": "brute_force", "risk_score": 78.8, "severity": "High", "triage_reason": "26 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 157.50380033884588, "bytes_received": 94.27310809572036, "login_attempts": 18, "process_name": "svchost.exe", "duration_sec": 1.3446771078478137, "label": "brute_force", "risk_score": 78.5, "severity": "High", "triage_reason": "18 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 166.12720201241652, "bytes_received": 84.46557815250594, "login_attempts": 16, "process_name": "svchost.exe", "duration_sec": 2.084846578985642, "label": "brute_force", "risk_score": 78.4, "severity": "High", "triage_reason": "16 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 96.6474057078715, "bytes_received": 113.86276082080823, "login_attempts": 16, "process_name": "svchost.exe", "duration_sec": 1.597624093140431, "label": "brute_force", "risk_score": 78.3, "severity": "High", "triage_reason": "16 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 148.2604780474655, "bytes_received": 105.88163309412022, "login_attempts": 21, "process_name": "svchost.exe", "duration_sec": 3.008903224396515, "label": "brute_force", "risk_score": 78.2, "severity": "High", "triage_reason": "21 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 144.75352807401745, "bytes_received": 113.53354922588204, "login_attempts": 24, "process_name": "svchost.exe", "duration_sec": 1.5406917707384835, "label": "brute_force", "risk_score": 78.2, "severity": "High", "triage_reason": "24 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 154.14192360684726, "bytes_received": 110.68687353658908, "login_attempts": 20, "process_name": "svchost.exe", "duration_sec": 1.4162495880596428, "label": "brute_force", "risk_score": 78.2, "severity": "High", "triage_reason": "20 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.8", "dst_port": 12050, "bytes_sent": 61.484502836510536, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2155043454176265, "label": "port_scan", "risk_score": 78.0, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 12050 with minimal response \u2014 possible scan probe"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 164.44610967565478, "bytes_received": 108.65861558333788, "login_attempts": 32, "process_name": "svchost.exe", "duration_sec": 2.2318615287785573, "label": "brute_force", "risk_score": 77.9, "severity": "High", "triage_reason": "32 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 152.4610157311756, "bytes_received": 113.5870779884416, "login_attempts": 25, "process_name": "svchost.exe", "duration_sec": 1.6990514195336932, "label": "brute_force", "risk_score": 77.9, "severity": "High", "triage_reason": "25 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 160.28559065336964, "bytes_received": 105.6662494924107, "login_attempts": 23, "process_name": "svchost.exe", "duration_sec": 1.8355552516645957, "label": "brute_force", "risk_score": 77.5, "severity": "High", "triage_reason": "23 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 136.06267971093493, "bytes_received": 112.65014234071695, "login_attempts": 28, "process_name": "svchost.exe", "duration_sec": 2.114093644480478, "label": "brute_force", "risk_score": 77.3, "severity": "High", "triage_reason": "28 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 121.80902239184783, "bytes_received": 115.435389313808, "login_attempts": 17, "process_name": "svchost.exe", "duration_sec": 1.620408226916248, "label": "brute_force", "risk_score": 77.3, "severity": "High", "triage_reason": "17 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "203.0.113.55", "dst_ip": "10.0.0.10", "dst_port": 3389, "bytes_sent": 137.109705616809, "bytes_received": 98.78967837697124, "login_attempts": 23, "process_name": "svchost.exe", "duration_sec": 2.240983913526446, "label": "brute_force", "risk_score": 77.2, "severity": "High", "triage_reason": "23 login attempts in a short window \u2014 possible brute force"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.19", "dst_port": 3478, "bytes_sent": 63.370486908447454, "bytes_received": 3.898864052015635, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1488258106815653, "label": "port_scan", "risk_score": 77.1, "severity": "High", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 3478 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.20", "dst_port": 2203, "bytes_sent": 61.6222461337816, "bytes_received": 1.35612807099578, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2710873242297746, "label": "port_scan", "risk_score": 75.0, "severity": "Medium", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 2203 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.28", "dst_port": 5351, "bytes_sent": 77.06379780782409, "bytes_received": 0.0, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.1556060407231911, "label": "port_scan", "risk_score": 73.1, "severity": "Medium", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 5351 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.30", "dst_port": 7164, "bytes_sent": 47.71651234762096, "bytes_received": 0.3097201748909375, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2109619458745169, "label": "port_scan", "risk_score": 72.9, "severity": "Medium", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 7164 with minimal response \u2014 possible scan probe"}, {"src_ip": "198.51.100.23", "dst_ip": "10.0.0.29", "dst_port": 2807, "bytes_sent": 60.512039105739646, "bytes_received": 3.020982745748501, "login_attempts": 0, "process_name": "nmap.exe", "duration_sec": 0.2155281241852139, "label": "port_scan", "risk_score": 70.8, "severity": "Medium", "triage_reason": "scanning tool detected (nmap.exe) \u2014 possible reconnaissance/port scan; connection to unusual port 2807 with minimal response \u2014 possible scan probe"}, {"src_ip": "10.0.0.4", "dst_ip": "185.220.101.7", "dst_port": 443, "bytes_sent": 553474.532238777, "bytes_received": 2293.7807706061185, "login_attempts": 1, "process_name": "powershell.exe", "duration_sec": 26.98445053873893, "label": "data_exfil", "risk_score": 70.7, "severity": "Medium", "triage_reason": "unusually large outbound transfer (553,474 bytes) to 185.220.101.7 \u2014 possible data exfiltration; powershell.exe initiating large data transfer \u2014 suspicious script-based exfil"}];
+const SUMMARY = {"total": 2085, "flagged": 84, "by_severity": {"High": 58, "Critical": 21, "Medium": 5}, "by_label": {"normal": 2000, "brute_force": 40, "port_scan": 30, "data_exfil": 15}, "avg_risk": 84.96666666666667, "detection_rate": 98.8};
+</script>
+<script>
+/* ===================== Clock ===================== */
+function tick(){
+  const now = new Date();
+  document.getElementById('clock').textContent = now.toLocaleTimeString('en-GB');
+  document.getElementById('date').textContent = now.toLocaleDateString('en-GB', {weekday:'short', day:'2-digit', month:'short', year:'numeric'});
+}
+tick(); setInterval(tick, 1000);
+
+/* ===================== KPIs ===================== */
+const total = SUMMARY.total;
+const flagged = SUMMARY.flagged;
+const avgRisk = SUMMARY.avg_risk.toFixed(1);
+const sev = SUMMARY.by_severity;
+const crit = sev.Critical || 0;
+
+const kpis = [
+  {label:'Events Analyzed', value: total.toLocaleString(), cls:'', foot:'logs processed by model'},
+  {label:'Flagged Anomalies', value: flagged, cls:'amber', foot:(flagged/total*100).toFixed(1)+'% of total volume'},
+  {label:'Critical Alerts', value: crit, cls:'red', foot:'require immediate response'},
+  {label:'Avg Risk Score', value: avgRisk, cls:'green', foot:'0–100 scale, IsolationForest'},
+  {label:'Detection Rate', value:'98.8%', cls:'green', foot:'1 false negative / 85 malicious'}
+];
+document.getElementById('kpiRow').innerHTML = kpis.map(k => `
+  <div class="kpi">
+    <div class="label">${k.label}</div>
+    <div class="value ${k.cls}">${k.value}</div>
+    <div class="foot">${k.foot}</div>
+  </div>
+`).join('');
+
+/* ===================== Threat Feed ===================== */
+const feedEl = document.getElementById('feed');
+const sorted = [...ALERTS].sort((a,b)=> b.risk_score - a.risk_score);
+feedEl.innerHTML = sorted.map((a,i) => `
+  <div class="feed-row" data-idx="${ALERTS.indexOf(a)}">
+    <div class="score score-${a.severity}">${a.risk_score.toFixed(1)}</div>
+    <div class="sev sev-${a.severity}">${a.severity}</div>
+    <div class="desc">${labelText(a)} · ${a.process_name}</div>
+    <div class="ip">${a.src_ip} → ${a.dst_ip}</div>
+  </div>
+`).join('');
+document.getElementById('feedMeta').textContent = `${ALERTS.length} alerts · sorted by risk`;
+
+function labelText(a){
+  const map = {
+    data_exfil:'Data Exfiltration',
+    port_scan:'Port Scan',
+    brute_force:'Brute Force',
+    normal:'Baseline'
+  };
+  return map[a.label] || a.label;
+}
+
+/* ===================== Donut: detection breakdown ===================== */
+const labelColors = {
+  data_exfil: '#FF4757',
+  port_scan: '#FFB627',
+  brute_force: '#4EA1FF',
+  normal: '#1C2A3A'
+};
+const labelNames = {
+  data_exfil:'Data Exfil',
+  port_scan:'Port Scan',
+  brute_force:'Brute Force',
+  normal:'Normal (unflagged)'
+};
+
+// counts among flagged alerts
+const counts = {};
+ALERTS.forEach(a => counts[a.label] = (counts[a.label]||0)+1);
+const flaggedTotal = ALERTS.length;
+
+const order = ['data_exfil','port_scan','brute_force'];
+let cumulative = 0;
+const radius = 60, circumference = 2*Math.PI*radius;
+let segments = '';
+order.forEach(key => {
+  const val = counts[key] || 0;
+  if(val === 0) return;
+  const frac = val/flaggedTotal;
+  const dash = frac*circumference;
+  segments += `<circle cx="70" cy="70" r="${radius}" fill="none" stroke="${labelColors[key]}" stroke-width="16"
+    stroke-dasharray="${dash} ${circumference-dash}" stroke-dashoffset="${-cumulative}" />`;
+  cumulative += dash;
+});
+
+const legendHTML = order.filter(k=>counts[k]).map(k => `
+  <div class="legend-item">
+    <div class="legend-swatch" style="background:${labelColors[k]}"></div>
+    <div class="legend-name">${labelNames[k]}</div>
+    <div class="legend-val">${counts[k]}</div>
+  </div>
+`).join('');
+
+document.getElementById('donutWrap').innerHTML = `
+  <div class="donut">
+    <svg width="140" height="140" viewBox="0 0 140 140">
+      <circle cx="70" cy="70" r="${radius}" fill="none" stroke="#1C2A3A" stroke-width="16"/>
+      ${segments}
+    </svg>
+    <div class="donut-center">
+      <div class="num">${flaggedTotal}</div>
+      <div class="lbl">ALERTS</div>
+    </div>
+  </div>
+  <div class="legend">${legendHTML}</div>
+`;
+
+/* ===================== Severity bars ===================== */
+const sevColors = {Critical:'#FF4757', High:'#FFB627', Medium:'#4EA1FF', Low:'#5C6773'};
+const sevOrder = ['Critical','High','Medium','Low'];
+const maxSev = Math.max(...sevOrder.map(s=>sev[s]||0));
+document.getElementById('sevBars').innerHTML = sevOrder.map(s => {
+  const val = sev[s]||0;
+  const pct = maxSev ? (val/maxSev*100) : 0;
+  return `
+    <div class="bar-row">
+      <div class="bar-label">${s}</div>
+      <div class="bar-track"><div class="bar-fill" style="width:${pct}%; background:${sevColors[s]}"></div></div>
+      <div class="bar-val">${val}</div>
+    </div>
+  `;
+}).join('');
+document.getElementById('sevMeta').textContent = `${flaggedTotal} flagged total`;
+
+/* ===================== Table ===================== */
+let currentSort = {key:'risk_score', dir:-1};
+let currentSevFilter = 'All';
+let currentSearch = '';
+
+function renderTable(){
+  let rows = [...ALERTS];
+
+  if(currentSevFilter !== 'All'){
+    rows = rows.filter(r => r.severity === currentSevFilter);
+  }
+  if(currentSearch){
+    const q = currentSearch.toLowerCase();
+    rows = rows.filter(r =>
+      r.src_ip.toLowerCase().includes(q) ||
+      r.dst_ip.toLowerCase().includes(q) ||
+      r.process_name.toLowerCase().includes(q) ||
+      r.label.toLowerCase().includes(q) ||
+      String(r.dst_port).includes(q)
+    );
+  }
+
+  rows.sort((a,b) => {
+    const ka = a[currentSort.key], kb = b[currentSort.key];
+    if(typeof ka === 'string') return ka.localeCompare(kb) * currentSort.dir;
+    return (ka - kb) * currentSort.dir;
+  });
+
+  document.getElementById('tableMeta').textContent = `showing ${rows.length} of ${ALERTS.length}`;
+
+  document.getElementById('tbody').innerHTML = rows.map(r => {
+    const idx = ALERTS.indexOf(r);
+    return `
+    <tr data-idx="${idx}">
+      <td class="mono">
+        <div class="risk-bar">
+          <div class="risk-track"><div class="risk-fill" style="width:${r.risk_score}%; background:${sevColors[r.severity]}"></div></div>
+          <span style="color:${sevColors[r.severity]}; font-weight:700;">${r.risk_score.toFixed(1)}</span>
+        </div>
+      </td>
+      <td><span class="pill sev-${r.severity}">${r.severity}</span></td>
+      <td class="mono">${r.src_ip}</td>
+      <td class="mono">${r.dst_ip}</td>
+      <td class="mono">${r.dst_port}</td>
+      <td>${r.process_name}</td>
+      <td>${labelText(r)}</td>
+      <td class="reason-cell">${r.triage_reason}</td>
+    </tr>
+  `}).join('');
+
+  // re-bind row clicks
+  document.querySelectorAll('#tbody tr').forEach(tr => {
+    tr.addEventListener('click', () => openModal(ALERTS[parseInt(tr.dataset.idx)]));
+  });
+}
+
+document.querySelectorAll('.filter-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    currentSevFilter = btn.dataset.sev;
+    renderTable();
+  });
+});
+
+document.getElementById('searchBox').addEventListener('input', e => {
+  currentSearch = e.target.value;
+  renderTable();
+});
+
+document.querySelectorAll('thead th[data-key]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.key;
+    if(currentSort.key === key) currentSort.dir *= -1;
+    else { currentSort.key = key; currentSort.dir = -1; }
+    renderTable();
+  });
+});
+
+/* ===================== Feed row click -> modal ===================== */
+document.querySelectorAll('.feed-row').forEach(row => {
+  row.addEventListener('click', () => openModal(ALERTS[parseInt(row.dataset.idx)]));
+});
+
+/* ===================== Modal ===================== */
+function openModal(a){
+  document.getElementById('modalGrid').innerHTML = `
+    <div class="k">Source IP</div><div class="v mono">${a.src_ip}</div>
+    <div class="k">Destination IP</div><div class="v mono">${a.dst_ip}</div>
+    <div class="k">Destination Port</div><div class="v mono">${a.dst_port}</div>
+    <div class="k">Process</div><div class="v">${a.process_name}</div>
+    <div class="k">Risk Score</div><div class="v" style="color:${sevColors[a.severity]}">${a.risk_score.toFixed(1)} / 100</div>
+    <div class="k">Severity</div><div class="v"><span class="pill sev-${a.severity}">${a.severity}</span></div>
+    <div class="k">Bytes Sent</div><div class="v mono">${Math.round(a.bytes_sent).toLocaleString()}</div>
+    <div class="k">Bytes Received</div><div class="v mono">${Math.round(a.bytes_received).toLocaleString()}</div>
+    <div class="k">Login Attempts</div><div class="v mono">${a.login_attempts}</div>
+    <div class="k">Duration (s)</div><div class="v mono">${a.duration_sec.toFixed(2)}</div>
+    <div class="k">Ground Truth</div><div class="v">${labelText(a)}</div>
+  `;
+  document.getElementById('modalReason').textContent = a.triage_reason;
+  document.getElementById('modalOverlay').classList.add('show');
+}
+document.getElementById('modalClose').addEventListener('click', () => {
+  document.getElementById('modalOverlay').classList.remove('show');
+});
+document.getElementById('modalOverlay').addEventListener('click', e => {
+  if(e.target.id === 'modalOverlay') document.getElementById('modalOverlay').classList.remove('show');
+});
+
+/* ===================== Init ===================== */
+renderTable();
+</script>
+</body>
+</html>

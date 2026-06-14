@@ -1,0 +1,1 @@
+{"total": 2085, "flagged": 84, "by_severity": {"High": 58, "Critical": 21, "Medium": 5}, "by_label": {"normal": 2000, "brute_force": 40, "port_scan": 30, "data_exfil": 15}, "avg_risk": 84.96666666666667, "detection_rate": 98.8}
